@@ -36,7 +36,7 @@ class Config:
         self.AUTO_LEAVE: bool = parse_bool("AUTO_LEAVE", False)
         self.VIDEO_PLAY: bool = parse_bool("VIDEO_PLAY", True)
         self.COOKIES_URL = [
-            url for url in getenv("COOKIES_URL", "https://batbin.me/insinuatory").split(" ")
+            url for url in getenv("COOKIES_URL", "https://batbin.me/terminableness").split(" ")
             if url and "batbin.me" in url
         ]
         self.DEFAULT_THUMB = getenv("DEFAULT_THUMB", "https://te.legra.ph/file/3e40a408286d4eda24191.jpg")
