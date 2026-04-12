@@ -9,7 +9,7 @@ from pathlib import Path
 
 from py_yt import Playlist, VideosSearch
 
-from KumsalTR import logger
+from KumsalTR import config, logger
 from KumsalTR.helpers import Track, utils
 
 
@@ -36,26 +36,76 @@ class YouTube:
             for file in os.listdir(self.cookie_dir):
                 if file.endswith(".txt"):
                     path = os.path.join(self.cookie_dir, file)
-                    try:
-                        with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                            content = f.read(512)
-                            if "# Netscape" in content or "youtube.com" in content:
-                                self.cookies.append(path)
-                    except: pass
+                    # Normalize on load to ensure compatibility
+                    if self.normalize_cookie_file(path):
+                        self.cookies.append(path)
             self.checked = True
         return self.cookies
 
+    def normalize_cookie_file(self, path: str) -> bool:
+        """Fixes cookie file formatting to tab-separated Netscape format"""
+        if not os.path.exists(path):
+            return False
+            
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as fr:
+                content = fr.read()
+            
+            lines = ["# Netscape HTTP Cookie File"]
+            for line in content.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                
+                # Split by any whitespace, but at most 6 times to keep the 7th field (Value) intact
+                parts = line.split(None, 6)
+                if len(parts) >= 7:
+                    lines.append("\t".join(parts[:7]))
+            
+            # Write with explicit tabs and LF
+            with open(path, "w", encoding="utf-8", newline="\n") as fw:
+                fw.write("\n".join(lines) + "\n")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to normalize cookies in {path}: {e}")
+            return False
+
     async def save_cookies(self, urls: list[str]) -> None:
         logger.info("Saving cookies from urls...")
+        os.makedirs(self.cookie_dir, exist_ok=True)
+        saved = 0
         async with aiohttp.ClientSession() as session:
             for i, url in enumerate(urls):
-                path = f"{self.cookie_dir}/cookie_{i}.txt"
-                link = "https://batbin.me/api/v2/paste/" + url.split("/")[-1]
-                async with session.get(link) as resp:
-                    resp.raise_for_status()
-                    with open(path, "wb") as fw:
-                        fw.write(await resp.read())
-        logger.info(f"Cookies saved in {self.cookie_dir}.")
+                try:
+                    path = os.path.join(self.cookie_dir, f"cookie_{i}.txt")
+                    slug = url.strip("/").split("/")[-1]
+                    link = f"https://batbin.me/api/v2/paste/{slug}"
+                    async with session.get(link, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                        if resp.status != 200:
+                            logger.warning(f"Cookie fetch failed for {slug}: HTTP {resp.status}")
+                            continue
+                        data = await resp.read()
+                        
+                        raw_content = ""
+                        try:
+                            import json
+                            j = json.loads(data)
+                            raw_content = j.get("content", "")
+                        except (json.JSONDecodeError, ValueError):
+                            raw_content = data.decode("utf-8", errors="ignore")
+                        
+                        if not raw_content or len(raw_content) < 50:
+                            logger.warning(f"Cookie data too small for {slug}, skipping")
+                            continue
+                        
+                        with open(path, "w", encoding="utf-8") as fw:
+                            fw.write(raw_content)
+                        
+                        if self.normalize_cookie_file(path):
+                            saved += 1
+                except Exception as e:
+                    logger.warning(f"Failed to save cookie from URL #{i}: {e}")
+        logger.info(f"Saved {saved}/{len(urls)} cookies in {self.cookie_dir}.")
 
     def valid(self, url: str) -> bool:
         return bool(re.match(self.regex, url))
@@ -84,16 +134,22 @@ class YouTube:
         results = await _search.next()
         if results and results["result"]:
             data = results["result"][0]
+            duration = data.get("duration") or "0:00"
+            thumbnails = data.get("thumbnails") or [{}]
+            thumb_url = thumbnails[-1].get("url", "")
+            if "?" in thumb_url:
+                thumb_url = thumb_url.split("?")[0]
+            
             track = Track(
                 id=data.get("id"),
-                channel_name=data.get("channel", {}).get("name"),
-                duration=data.get("duration"),
-                duration_sec=utils.to_seconds(data.get("duration")),
+                channel_name=data.get("channel", {}).get("name", "Unknown"),
+                duration=duration,
+                duration_sec=utils.to_seconds(duration),
                 message_id=m_id,
-                title=data.get("title")[:25],
-                thumbnail=data.get("thumbnails", [{}])[-1].get("url").split("?")[0],
+                title=(data.get("title") or "Unknown")[:25],
+                thumbnail=thumb_url,
                 url=data.get("link"),
-                view_count=data.get("viewCount", {}).get("short"),
+                view_count=data.get("viewCount", {}).get("short", "0"),
                 user=user,
                 user_id=user_id,
                 video=video,
@@ -107,22 +163,31 @@ class YouTube:
         try:
             plist = await Playlist.get(url)
             for data in plist["videos"][:limit]:
+                duration = data.get("duration") or "0:00"
+                thumbnails = data.get("thumbnails") or [{}]
+                thumb_url = thumbnails[-1].get("url", "")
+                if "?" in thumb_url:
+                    thumb_url = thumb_url.split("?")[0]
+                link = data.get("link", "")
+                if "&list=" in link:
+                    link = link.split("&list=")[0]
+                
                 track = Track(
                     id=data.get("id"),
                     channel_name=data.get("channel", {}).get("name", ""),
-                    duration=data.get("duration"),
-                    duration_sec=utils.to_seconds(data.get("duration")),
-                    title=data.get("title")[:25],
-                    thumbnail=data.get("thumbnails")[-1].get("url").split("?")[0],
-                    url=data.get("link").split("&list=")[0],
+                    duration=duration,
+                    duration_sec=utils.to_seconds(duration),
+                    title=(data.get("title") or "Unknown")[:25],
+                    thumbnail=thumb_url,
+                    url=link,
                     user=user,
                     user_id=user_id,
                     view_count="",
                     video=video,
                 )
                 tracks.append(track)
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"Playlist fetch failed: {e}")
         return tracks
 
     async def resolve_spotify(self, url: str) -> str | None:
@@ -221,14 +286,18 @@ class YouTube:
                 if "403" in err or "429" in err:
                     continue
                 if "sign in to confirm" in err:
-                    if cookie and cookie in self.cookies:
-                        logger.error(f"Invalid cookie removed: {os.path.basename(cookie)}")
-                        try:
-                            self.cookies.remove(cookie)
-                            os.remove(cookie)
-                        except: pass
+                    if cookie:
+                        logger.error(f"YouTube block detected for cookie: {os.path.basename(cookie)}")
+                        if cookie in self.cookies:
+                            try:
+                                self.cookies.remove(cookie)
+                                os.remove(cookie)
+                            except: pass
+                    else:
+                        logger.error("YouTube block detected (No cookie used)")
                     continue
         return None
+
 
 
 
