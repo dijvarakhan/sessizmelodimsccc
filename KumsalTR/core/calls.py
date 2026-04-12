@@ -3,6 +3,7 @@
 # Licensed under the MIT License.
 # This file is part of KumsalTR
 
+import asyncio
 from ntgcalls import (ConnectionNotFound, TelegramServerError,
                       RTMPStreamingUnsupported)
 from pyrogram.errors import MessageIdInvalid
@@ -68,11 +69,19 @@ class TgCall(PyTgCalls):
             ffmpeg_parameters=f"-ss {seek_time}" if seek_time > 1 else None,
         )
         try:
-            await client.play(
-                chat_id=chat_id,
-                stream=stream,
-                config=types.GroupCallConfig(auto_start=False),
-            )
+            try:
+                await asyncio.wait_for(
+                    client.play(
+                        chat_id=chat_id,
+                        stream=stream,
+                        config=types.GroupCallConfig(auto_start=False),
+                    ),
+                    timeout=20
+                )
+            except asyncio.TimeoutError:
+                await message.edit_text("<b>❌ Hᴀᴛᴀ:</b> Sᴛʀᴇᴀᴍ ʙᴀşʟᴀᴛɪʟɪʀᴋᴇɴ ᴢᴀᴍᴀɴ ᴀşɪᴍɪ ᴏʟᴜşᴛᴜ. Lᴜ̈ᴛғᴇɴ ᴛᴇᴋʀᴀʀ ᴅᴇɴᴇʏɪɴ.")
+                return await self.stop(chat_id)
+
             if not seek_time:
                 media.time = 1
                 await db.add_call(chat_id)
@@ -193,3 +202,4 @@ class TgCall(PyTgCalls):
             self.clients.append(client)
             await self.decorators(client)
         logger.info("PyTgCalls client(s) started without thumbnails.")
+
